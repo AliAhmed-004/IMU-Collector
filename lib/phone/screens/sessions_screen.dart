@@ -6,7 +6,7 @@ class SessionsScreen extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     return const Scaffold(
-      body: Center(child: Text('Sessions — sync & classify here')),
+      body: Center(child: Text('Use the tabs below to browse files')),
     );
   }
 }

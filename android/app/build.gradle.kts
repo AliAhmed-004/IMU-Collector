@@ -26,7 +26,7 @@ android {
         create("watch") {
             dimension = "device"
             applicationId = "com.spudbyte.imu_collector.watch"
-            minSdk = 26  // Wear OS minimum
+            minSdk = 26
         }
         create("phone") {
             dimension = "device"
@@ -46,6 +46,10 @@ kotlin {
     compilerOptions {
         jvmTarget = org.jetbrains.kotlin.gradle.dsl.JvmTarget.JVM_17
     }
+}
+
+dependencies {
+    implementation("com.google.android.gms:play-services-wearable:18.2.0")
 }
 
 flutter {
