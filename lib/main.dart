@@ -9,7 +9,6 @@ import 'package:wakelock_plus/wakelock_plus.dart';
 
 void main() {
   WidgetsFlutterBinding.ensureInitialized();
-  // Lock to portrait — watch screen is square/round but this prevents rotation
   SystemChrome.setPreferredOrientations([DeviceOrientation.portraitUp]);
   runApp(const CollectorApp());
 }
@@ -36,10 +35,6 @@ class CollectorApp extends StatelessWidget {
   }
 }
 
-// ─────────────────────────────────────────────────────────────────────────────
-// Recorder screen
-// ─────────────────────────────────────────────────────────────────────────────
-
 class RecorderScreen extends StatefulWidget {
   const RecorderScreen({super.key});
 
@@ -49,6 +44,20 @@ class RecorderScreen extends StatefulWidget {
 
 class _RecorderScreenState extends State<RecorderScreen>
     with SingleTickerProviderStateMixin {
+  // ── Shot types ─────────────────────────────────────────────────────
+  static const _shotTypes = [
+    'forehand_drive',
+    'forehand_topspin',
+    'forehand_smash',
+    'backhand_drive',
+    'backhand_push',
+    'backhand_smash',
+    'serve',
+    'idle',
+  ];
+
+  String _selectedShot = 'forehand_drive';
+
   // ── State ──────────────────────────────────────────────────────────
   bool _recording = false;
   Duration _elapsed = Duration.zero;
@@ -62,19 +71,15 @@ class _RecorderScreenState extends State<RecorderScreen>
   IOSink? _sink;
   File? _currentFile;
 
-  // Sensor subscriptions
   StreamSubscription<AccelerometerEvent>? _accelSub;
   StreamSubscription<GyroscopeEvent>? _gyroSub;
 
-  // Latest sensor readings — kept in sync, written together
   AccelerometerEvent? _lastAccel;
   GyroscopeEvent? _lastGyro;
 
-  // Sampling control — target 50 Hz
   static const _targetIntervalMs = 20;
   Timer? _sampleTimer;
 
-  // ── Animation for the record button pulse ─────────────────────────
   late AnimationController _pulseCtrl;
   late Animation<double> _pulseAnim;
 
@@ -103,18 +108,14 @@ class _RecorderScreenState extends State<RecorderScreen>
     _errorMessage = null;
 
     try {
-      // Keep screen on while recording
       await WakelockPlus.enable();
 
-      // Build file path: /sdcard/Android/data/<pkg>/files/imu_<timestamp>.csv
-      debugPrint('BUilding file path...');
       final dir = await getExternalStorageDirectory() ??
           await getApplicationDocumentsDirectory();
       final timestamp = DateFormat('yyyyMMdd_HHmmss').format(DateTime.now());
-      final filename = 'imu_$timestamp.csv';
+      final filename = 'imu_${_selectedShot}_$timestamp.csv';
       _currentFile = File('${dir.path}/$filename');
 
-      // Open file and write CSV header
       _sink = _currentFile!.openWrite();
       _sink!.writeln('timestamp_ms,ax,ay,az,gx,gy,gz');
 
@@ -122,39 +123,25 @@ class _RecorderScreenState extends State<RecorderScreen>
       _sampleCount = 0;
       _lastSavedPath = null;
 
-      // Subscribe to raw sensors — just keep latest values
-      debugPrint('Subscribing to sensors...');
       _accelSub = accelerometerEventStream(
         samplingPeriod: SensorInterval.normalInterval,
       ).listen(
-        (e) {
-          _lastAccel = e;
-          print('ACCEL: ${e.x}, ${e.y}, ${e.z}');
-        },
-        onError: (e) {
-          print('ACCEL ERROR: $e');
-        },
+        (e) => _lastAccel = e,
+        onError: (e) => debugPrint('ACCEL ERROR: $e'),
       );
 
       _gyroSub = gyroscopeEventStream(
         samplingPeriod: SensorInterval.normalInterval,
       ).listen(
-        (e) {
-          _lastGyro = e;
-          print('GYRO: ${e.x}, ${e.y}, ${e.z}');
-        },
-        onError: (e) {
-          print('GYRO ERROR: $e');
-        },
+        (e) => _lastGyro = e,
+        onError: (e) => debugPrint('GYRO ERROR: $e'),
       );
 
-      // Write at fixed 50 Hz regardless of sensor delivery jitter
       _sampleTimer = Timer.periodic(
         const Duration(milliseconds: _targetIntervalMs),
         (_) => _writeSample(),
       );
 
-      // UI clock — updates every second
       _uiTimer = Timer.periodic(const Duration(seconds: 1), (_) {
         if (mounted) {
           setState(() {
@@ -178,10 +165,7 @@ class _RecorderScreenState extends State<RecorderScreen>
   void _writeSample() {
     final accel = _lastAccel;
     final gyro = _lastGyro;
-    if (accel == null || gyro == null) {
-      print('Warning: Sensor data not available yet.');
-      return;
-    }
+    if (accel == null || gyro == null) return;
 
     final ts = DateTime.now().millisecondsSinceEpoch;
     _sink?.writeln(
@@ -242,15 +226,24 @@ class _RecorderScreenState extends State<RecorderScreen>
 
   String _shortPath(String? path) {
     if (path == null) return '';
-    final parts = path.split('/');
-    return parts.last; // just the filename
+    return path.split('/').last;
+  }
+
+  void _prevShot() {
+    final i = _shotTypes.indexOf(_selectedShot);
+    setState(() => _selectedShot =
+        _shotTypes[(i - 1 + _shotTypes.length) % _shotTypes.length]);
+  }
+
+  void _nextShot() {
+    final i = _shotTypes.indexOf(_selectedShot);
+    setState(() => _selectedShot = _shotTypes[(i + 1) % _shotTypes.length]);
   }
 
   // ── Build ──────────────────────────────────────────────────────────
 
   @override
   Widget build(BuildContext context) {
-    // Wear OS screens are typically 384×384 or 450×450 round
     return Scaffold(
       body: SafeArea(
         child: Center(
@@ -266,7 +259,49 @@ class _RecorderScreenState extends State<RecorderScreen>
                   recording: _recording,
                 ),
 
-                const SizedBox(height: 28),
+                const SizedBox(height: 16),
+
+                // ── Shot type selector (hidden while recording) ────
+                if (!_recording) ...[
+                  Row(
+                    mainAxisAlignment: MainAxisAlignment.center,
+                    children: [
+                      IconButton(
+                        onPressed: _prevShot,
+                        icon: const Icon(Icons.chevron_left),
+                        color: const Color(0xFF4FC3F7),
+                        iconSize: 20,
+                        padding: EdgeInsets.zero,
+                        constraints:
+                            const BoxConstraints(minWidth: 32, minHeight: 32),
+                      ),
+                      SizedBox(
+                        width: 130,
+                        child: Text(
+                          _selectedShot.replaceAll('_', ' '),
+                          textAlign: TextAlign.center,
+                          style: const TextStyle(
+                            color: Color(0xFF4FC3F7),
+                            fontSize: 12,
+                            letterSpacing: 0.5,
+                          ),
+                          maxLines: 1,
+                          overflow: TextOverflow.ellipsis,
+                        ),
+                      ),
+                      IconButton(
+                        onPressed: _nextShot,
+                        icon: const Icon(Icons.chevron_right),
+                        color: const Color(0xFF4FC3F7),
+                        iconSize: 20,
+                        padding: EdgeInsets.zero,
+                        constraints:
+                            const BoxConstraints(minWidth: 32, minHeight: 32),
+                      ),
+                    ],
+                  ),
+                  const SizedBox(height: 16),
+                ],
 
                 // ── Record / Stop button ───────────────────────────
                 ScaleTransition(
@@ -297,7 +332,7 @@ class _RecorderScreenState extends State<RecorderScreen>
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// Sub-widgets — kept small for watch screen real estate
+// Sub-widgets
 // ─────────────────────────────────────────────────────────────────────────────
 
 class _TimerDisplay extends StatelessWidget {
