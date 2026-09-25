@@ -1,4 +1,5 @@
-<manifest xmlns:android="http://schemas.android.com/apk/res/android">
+<manifest xmlns:android="http://schemas.android.com/apk/res/android"
+    xmlns:tools="http://schemas.android.com/tools">
 
     <uses-permission android:name="android.permission.WAKE_LOCK" />
     <uses-permission android:name="android.permission.WRITE_EXTERNAL_STORAGE"
@@ -10,28 +11,13 @@
     <uses-feature android:name="android.hardware.sensor.accelerometer" android:required="true" />
     <uses-feature android:name="android.hardware.sensor.gyroscope" android:required="true" />
 
-    <application
-        android:label="IMU Collector"
-        android:icon="@mipmap/ic_launcher"
-        android:theme="@android:style/Theme.DeviceDefault"
-        android:allowBackup="true"
-        android:supportsRtl="true">
-
-        <activity
-            android:name=".MainActivity"
-            android:exported="true"
-            android:launchMode="singleTop"
-            android:taskAffinity=""
-            android:screenOrientation="portrait">
-            <intent-filter>
-                <action android:name="android.intent.action.MAIN" />
-                <category android:name="android.intent.category.LAUNCHER" />
-            </intent-filter>
+    <application tools:replace="android:label"
+        android:label="@string/app_name">
+        <activity android:name=".MainActivity">
             <meta-data
                 android:name="io.flutter.dart-entrypoint"
                 android:value="mainWatch" />
         </activity>
-
     </application>
 
 </manifest>
