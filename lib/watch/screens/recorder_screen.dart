@@ -1,39 +1,11 @@
 import 'dart:async';
 import 'dart:io';
+
 import 'package:flutter/material.dart';
-import 'package:flutter/services.dart';
 import 'package:intl/intl.dart';
 import 'package:path_provider/path_provider.dart';
 import 'package:sensors_plus/sensors_plus.dart';
 import 'package:wakelock_plus/wakelock_plus.dart';
-
-void main() {
-  WidgetsFlutterBinding.ensureInitialized();
-  SystemChrome.setPreferredOrientations([DeviceOrientation.portraitUp]);
-  runApp(const CollectorApp());
-}
-
-class CollectorApp extends StatelessWidget {
-  const CollectorApp({super.key});
-
-  @override
-  Widget build(BuildContext context) {
-    return MaterialApp(
-      title: 'IMU Collector',
-      debugShowCheckedModeBanner: false,
-      theme: ThemeData(
-        colorScheme: ColorScheme.fromSeed(
-          seedColor: const Color(0xFF4FC3F7),
-          brightness: Brightness.dark,
-          surface: Colors.black,
-        ),
-        useMaterial3: true,
-        scaffoldBackgroundColor: Colors.black,
-      ),
-      home: const RecorderScreen(),
-    );
-  }
-}
 
 class RecorderScreen extends StatefulWidget {
   const RecorderScreen({super.key});
@@ -399,7 +371,7 @@ class _RecordButton extends StatelessWidget {
           boxShadow: recording
               ? [
                   BoxShadow(
-                    color: const Color(0xFFEF5350).withOpacity(0.35),
+                    color: const Color(0xFFEF5350).withValues(alpha: 0.35),
                     blurRadius: 20,
                     spreadRadius: 4,
                   ),
