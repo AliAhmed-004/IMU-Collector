@@ -96,14 +96,14 @@ class _RecorderScreenState extends State<RecorderScreen>
       _lastSavedPath = null;
 
       _accelSub = accelerometerEventStream(
-        samplingPeriod: SensorInterval.normalInterval,
+        samplingPeriod: SensorInterval.fastestInterval,
       ).listen(
         (e) => _lastAccel = e,
         onError: (e) => debugPrint('ACCEL ERROR: $e'),
       );
 
       _gyroSub = gyroscopeEventStream(
-        samplingPeriod: SensorInterval.normalInterval,
+        samplingPeriod: SensorInterval.fastestInterval,
       ).listen(
         (e) => _lastGyro = e,
         onError: (e) => debugPrint('GYRO ERROR: $e'),

@@ -1,6 +1,7 @@
 <manifest xmlns:android="http://schemas.android.com/apk/res/android"
     package="com.spudbyte.imu_collector">
 
+    <uses-permission android:name="android.permission.HIGH_SAMPLING_RATE_SENSORS" />   
     <uses-permission android:name="android.permission.WAKE_LOCK" />
 
     <application
