@@ -2,6 +2,7 @@ import 'dart:async';
 import 'dart:io';
 
 import 'package:flutter/material.dart';
+import 'package:imu_collector/shared/constants.dart';
 import 'package:intl/intl.dart';
 import 'package:path_provider/path_provider.dart';
 import 'package:sensors_plus/sensors_plus.dart';
@@ -17,18 +18,8 @@ class RecorderScreen extends StatefulWidget {
 class _RecorderScreenState extends State<RecorderScreen>
     with SingleTickerProviderStateMixin {
   // ── Shot types ─────────────────────────────────────────────────────
-  static const _shotTypes = [
-    'forehand_drive',
-    'forehand_topspin',
-    'forehand_smash',
-    'backhand_drive',
-    'backhand_push',
-    'backhand_smash',
-    'serve',
-    'idle',
-  ];
 
-  String _selectedShot = 'forehand_drive';
+  String _selectedShot = kShotTypes.first;
 
   // ── State ──────────────────────────────────────────────────────────
   bool _recording = false;
@@ -202,14 +193,14 @@ class _RecorderScreenState extends State<RecorderScreen>
   }
 
   void _prevShot() {
-    final i = _shotTypes.indexOf(_selectedShot);
+    final i = kShotTypes.indexOf(_selectedShot);
     setState(() => _selectedShot =
-        _shotTypes[(i - 1 + _shotTypes.length) % _shotTypes.length]);
+        kShotTypes[(i - 1 + kShotTypes.length) % kShotTypes.length]);
   }
 
   void _nextShot() {
-    final i = _shotTypes.indexOf(_selectedShot);
-    setState(() => _selectedShot = _shotTypes[(i + 1) % _shotTypes.length]);
+    final i = kShotTypes.indexOf(_selectedShot);
+    setState(() => _selectedShot = kShotTypes[(i + 1) % kShotTypes.length]);
   }
 
   // ── Build ──────────────────────────────────────────────────────────
