@@ -1,6 +1,8 @@
 package com.spudbyte.imu_collector
 
+import android.content.Intent
 import android.util.Log
+import androidx.localbroadcastmanager.content.LocalBroadcastManager
 import com.google.android.gms.wearable.ChannelClient
 import com.google.android.gms.wearable.MessageEvent
 import com.google.android.gms.wearable.Wearable
@@ -12,14 +14,22 @@ class WearDataService : WearableListenerService() {
 
     companion object {
         const val TAG = "WearDataService"
+        const val ACTION_FILE_LIST   = "com.spudbyte.imu_collector.FILE_LIST"
+        const val ACTION_SYNC_DONE   = "com.spudbyte.imu_collector.SYNC_DONE"
+        const val ACTION_FILE_RECEIVED = "com.spudbyte.imu_collector.FILE_RECEIVED"
+        const val EXTRA_PAYLOAD      = "payload"
     }
 
-    // Handles messages from the other device
+    private fun broadcast(action: String, payload: String? = null) {
+        val intent = Intent(action)
+        if (payload != null) intent.putExtra(EXTRA_PAYLOAD, payload)
+        LocalBroadcastManager.getInstance(this).sendBroadcast(intent)
+    }
+
     override fun onMessageReceived(messageEvent: MessageEvent) {
         Log.d(TAG, "Message received: ${messageEvent.path}")
         when (messageEvent.path) {
 
-            // Phone → Watch: list your files and send back
             "/list_files" -> {
                 val dir = getExternalFilesDir(null) ?: filesDir
                 val files = dir.listFiles { f -> f.name.endsWith(".csv") }
@@ -34,20 +44,25 @@ class WearDataService : WearableListenerService() {
                 )
             }
 
-            // Phone → Watch: delete a specific file
             "/delete_file" -> {
                 val path = String(messageEvent.data)
                 File(path).delete()
                 Log.d(TAG, "Deleted: $path")
             }
 
-            // Phone → Watch: sync all files, then optionally delete
             "/sync_all" -> {
-                val deleteAfterSync = String(messageEvent.data) == "delete"
+                val parts = String(messageEvent.data).split("\n", limit = 2)
+                val deleteAfterSync = parts[0] == "delete"
+                val skip = if (parts.size > 1 && parts[1].isNotEmpty())
+                    parts[1].split("|").toSet() else emptySet()
                 val dir = getExternalFilesDir(null) ?: filesDir
                 val files = dir.listFiles { f -> f.name.endsWith(".csv") } ?: return
                 val channelClient = Wearable.getChannelClient(this)
                 for (file in files) {
+                    if (file.name in skip) {
+                        Log.d(TAG, "Skip already-synced ${file.name}")
+                        continue
+                    }
                     try {
                         val channel = Tasks.await(
                             channelClient.openChannel(
@@ -66,7 +81,6 @@ class WearDataService : WearableListenerService() {
                         Log.e(TAG, "Failed to sync ${file.name}", e)
                     }
                 }
-                // Notify phone that sync is complete
                 Tasks.await(
                     Wearable.getMessageClient(this).sendMessage(
                         messageEvent.sourceNodeId,
@@ -76,23 +90,18 @@ class WearDataService : WearableListenerService() {
                 )
             }
 
-            // Watch → Phone: file list response (phone-side receives this)
             "/file_list_response" -> {
                 val payload = String(messageEvent.data)
                 Log.d(TAG, "File list received: $payload")
-                // Broadcast to Flutter via a local broadcast or store for polling
-                // MainActivity handles this via the channel
-                WearFileListHolder.update(payload)
+                broadcast(ACTION_FILE_LIST, payload)
             }
 
-            // Watch → Phone: sync complete notification
             "/sync_complete" -> {
-                WearFileListHolder.notifySyncComplete()
+                broadcast(ACTION_SYNC_DONE)
             }
         }
     }
 
-    // Handles incoming file channel (phone receiving a file from watch)
     override fun onChannelOpened(channel: ChannelClient.Channel) {
         Log.d(TAG, "Channel opened: ${channel.path}")
         if (channel.path.startsWith("/imu_file/")) {
@@ -107,8 +116,8 @@ class WearDataService : WearableListenerService() {
                         outFile.outputStream().use { output -> input.copyTo(output) }
                     }
                     Tasks.await(channelClient.close(channel))
-                    Log.d(TAG, "Saved received file: ${outFile.absolutePath}")
-                    WearFileListHolder.notifyFileReceived(outFile.absolutePath)
+                    Log.d(TAG, "Saved: ${outFile.absolutePath}")
+                    broadcast(ACTION_FILE_RECEIVED, outFile.absolutePath)
                 } catch (e: Exception) {
                     Log.e(TAG, "Failed to receive file $filename", e)
                 }

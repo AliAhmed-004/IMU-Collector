@@ -25,12 +25,12 @@ android {
     productFlavors {
         create("watch") {
             dimension = "device"
-            applicationId = "com.spudbyte.imu_collector.watch"
+            applicationId = "com.spudbyte.imu_collector"
             minSdk = 26
         }
         create("phone") {
             dimension = "device"
-            applicationId = "com.spudbyte.imu_collector.phone"
+            applicationId = "com.spudbyte.imu_collector"
             minSdk = 26
         }
     }
@@ -50,6 +50,7 @@ kotlin {
 
 dependencies {
     implementation("com.google.android.gms:play-services-wearable:18.2.0")
+    implementation("androidx.localbroadcastmanager:localbroadcastmanager:1.1.0")
 }
 
 flutter {

@@ -11,6 +11,7 @@ class WatchFilesScreen extends StatefulWidget {
 
 class _WatchFilesScreenState extends State<WatchFilesScreen> {
   List<WatchFile> _files = [];
+  Set<String> _syncedNames = {};
   bool _loading = false;
   bool _syncing = false;
   String? _error;
@@ -38,6 +39,14 @@ class _WatchFilesScreenState extends State<WatchFilesScreen> {
     if (widget.watchConnected) _refresh();
   }
 
+  @override
+  void didUpdateWidget(WatchFilesScreen oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    if (!oldWidget.watchConnected && widget.watchConnected) {
+      _refresh();
+    }
+  }
+
   Future<void> _refresh() async {
     if (!widget.watchConnected) return;
     setState(() {
@@ -45,8 +54,22 @@ class _WatchFilesScreenState extends State<WatchFilesScreen> {
       _error = null;
     });
     try {
+      // Load names already on this phone so we can flag synced watch files.
+      final synced = await WearService.listSyncedFiles();
+      if (mounted) {
+        setState(() => _syncedNames = synced.map((f) => f.name).toSet());
+      }
       await WearService.requestFileList();
-      // Response comes back via WearService.onWatchFileList callback
+      // Response comes back via WearService.onWatchFileList callback.
+      // If the watch never replies, stop the spinner and show an error.
+      Future.delayed(const Duration(seconds: 10), () {
+        if (mounted && _loading) {
+          setState(() {
+            _loading = false;
+            _error = 'No response from watch. Is the app open on the watch?';
+          });
+        }
+      });
     } catch (e) {
       setState(() {
         _error = e.toString();
@@ -216,18 +239,34 @@ class _WatchFilesScreenState extends State<WatchFilesScreen> {
                                 const Divider(height: 1),
                             itemBuilder: (_, i) {
                               final file = _files[i];
+                              final synced = _syncedNames.contains(file.name);
                               return ListTile(
-                                leading: const Icon(
-                                    Icons.insert_drive_file_outlined,
-                                    size: 20),
+                                leading: Icon(
+                                    synced
+                                        ? Icons.cloud_done
+                                        : Icons.insert_drive_file_outlined,
+                                    size: 20,
+                                    color: synced ? Colors.green : null),
                                 title: Text(
                                   file.name,
                                   style: const TextStyle(fontSize: 13),
                                 ),
-                                subtitle: Text(
-                                  _formatSize(file.size),
-                                  style: const TextStyle(
-                                      fontSize: 11, color: Colors.grey),
+                                subtitle: Row(
+                                  children: [
+                                    Text(
+                                      _formatSize(file.size),
+                                      style: const TextStyle(
+                                          fontSize: 11, color: Colors.grey),
+                                    ),
+                                    if (synced) ...[
+                                      const SizedBox(width: 8),
+                                      const Text(
+                                        'Synced',
+                                        style: TextStyle(
+                                            fontSize: 11, color: Colors.green),
+                                      ),
+                                    ],
+                                  ],
                                 ),
                                 trailing: IconButton(
                                   icon: const Icon(Icons.delete_outline,

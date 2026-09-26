@@ -1,14 +1,17 @@
 package com.spudbyte.imu_collector
 
+import android.content.BroadcastReceiver
+import android.content.Context
+import android.content.Intent
+import android.content.IntentFilter
+import android.util.Log
+import androidx.localbroadcastmanager.content.LocalBroadcastManager
+import com.google.android.gms.tasks.Tasks
+import com.google.android.gms.wearable.Wearable
 import io.flutter.embedding.android.FlutterFragmentActivity
 import io.flutter.embedding.engine.FlutterEngine
 import io.flutter.plugin.common.MethodChannel
-import com.google.android.gms.wearable.Wearable
-import com.google.android.gms.wearable.ChannelClient
-import com.google.android.gms.tasks.Tasks
-import android.util.Log
 import java.io.File
-import java.io.InputStream
 
 class MainActivity : FlutterFragmentActivity() {
 
@@ -18,491 +21,192 @@ class MainActivity : FlutterFragmentActivity() {
         const val TAG = "IMUCollector"
     }
 
+    private var phoneChannel: MethodChannel? = null
+
+    private val wearReceiver = object : BroadcastReceiver() {
+        override fun onReceive(context: Context, intent: Intent) {
+            val payload = intent.getStringExtra(WearDataService.EXTRA_PAYLOAD)
+            when (intent.action) {
+                WearDataService.ACTION_FILE_LIST ->
+                    phoneChannel?.invokeMethod("onWatchFileList", payload ?: "")
+                WearDataService.ACTION_SYNC_DONE ->
+                    phoneChannel?.invokeMethod("onSyncComplete", null)
+                WearDataService.ACTION_FILE_RECEIVED ->
+                    phoneChannel?.invokeMethod("onFileReceived", payload)
+            }
+        }
+    }
+
     override fun configureFlutterEngine(flutterEngine: FlutterEngine) {
         super.configureFlutterEngine(flutterEngine)
 
-        // ── Watch-side channel ────────────────────────────────────────────
-        // List files, delete files, send files to phone.
         MethodChannel(
             flutterEngine.dartExecutor.binaryMessenger,
             WATCH_CHANNEL
         ).setMethodCallHandler { call, result ->
             when (call.method) {
-                "listFiles" -> listFiles(result)
-
-                "deleteFile" -> {
-                    val path = call.argument<String>("path")
-                    deleteFile(path, result)
-                }
-
-                "sendFileToPhone" -> {
-                    val path = call.argument<String>("path")
-                    sendFileToPhone(path, result)
-                }
-
-                else -> result.notImplemented()
+                "listFiles"        -> listFiles(result)
+                "deleteFile"       -> deleteFile(call.argument("path"), result)
+                "sendFileToPhone"  -> sendFileToPhone(call.argument("path"), result)
+                else               -> result.notImplemented()
             }
         }
 
-        // ── Phone-side channel ────────────────────────────────────────────
-        // Connection status, list synced files, delete synced files.
-        val phoneChannel = MethodChannel(
+        phoneChannel = MethodChannel(
             flutterEngine.dartExecutor.binaryMessenger,
             PHONE_CHANNEL
-        )
-
-        phoneChannel.setMethodCallHandler { call, result ->
-            when (call.method) {
-                "getConnectedNodes" -> getConnectedNodes(result)
-
-                "requestFileList" -> requestFileList(result)
-
-                "deleteWatchFile" -> {
-                    val path = call.argument<String>("path")
-                    deleteWatchFile(path, result)
+        ).also { ch ->
+            ch.setMethodCallHandler { call, result ->
+                when (call.method) {
+                    "getConnectedNodes" -> getConnectedNodes(result)
+                    "requestFileList"   -> requestFileList(result)
+                    "deleteWatchFile"   -> deleteWatchFile(call.argument("path"), result)
+                    "syncAllFiles"      -> syncAllFiles(call.argument<Boolean>("deleteAfterSync") ?: false, result)
+                    "listSyncedFiles"   -> listSyncedFiles(result)
+                    "deleteSyncedFile"  -> deleteSyncedFile(call.argument("path"), result)
+                    else                -> result.notImplemented()
                 }
-
-                "syncAllFiles" -> {
-                    val deleteAfterSync =
-                        call.argument<Boolean>("deleteAfterSync") ?: false
-
-                    syncAllFiles(deleteAfterSync, result)
-                }
-
-                "listSyncedFiles" -> listSyncedFiles(result)
-
-                "deleteSyncedFile" -> {
-                    val path = call.argument<String>("path")
-                    deleteSyncedFile(path, result)
-                }
-
-                else -> result.notImplemented()
             }
         }
 
-        // ── WearFileListHolder callbacks ──────────────────────────────────
-        // These callbacks receive updates from the Wear OS side and forward
-        // them to Flutter through the phone channel.
-
-        WearFileListHolder.onFileListUpdated = {
-            runOnUiThread {
-                phoneChannel.invokeMethod(
-                    "onWatchFileList",
-                    WearFileListHolder.lastFileListPayload
-                )
-            }
+        val filter = IntentFilter().apply {
+            addAction(WearDataService.ACTION_FILE_LIST)
+            addAction(WearDataService.ACTION_SYNC_DONE)
+            addAction(WearDataService.ACTION_FILE_RECEIVED)
         }
-
-        WearFileListHolder.onSyncComplete = {
-            runOnUiThread {
-                phoneChannel.invokeMethod(
-                    "onSyncComplete",
-                    null
-                )
-            }
-        }
-
-        WearFileListHolder.onFileReceived = { path ->
-            runOnUiThread {
-                phoneChannel.invokeMethod(
-                    "onFileReceived",
-                    path
-                )
-            }
-        }
+        LocalBroadcastManager.getInstance(this).registerReceiver(wearReceiver, filter)
     }
 
-    // ── Watch-side implementations ───────────────────────────────────────
+    override fun onDestroy() {
+        LocalBroadcastManager.getInstance(this).unregisterReceiver(wearReceiver)
+        super.onDestroy()
+    }
+
+    // ── Watch-side ────────────────────────────────────────────────────────
 
     private fun listFiles(result: MethodChannel.Result) {
         Thread {
             try {
                 val dir = getExternalFilesDir(null) ?: filesDir
-
-                val files = dir.listFiles { f ->
-                    f.name.endsWith(".csv")
-                }
-                    ?.map {
-                        mapOf(
-                            "name" to it.name,
-                            "path" to it.absolutePath,
-                            "size" to it.length()
-                        )
-                    }
+                val files = dir.listFiles { f -> f.name.endsWith(".csv") }
+                    ?.map { mapOf("name" to it.name, "path" to it.absolutePath, "size" to it.length()) }
                     ?: emptyList()
-
-                runOnUiThread {
-                    result.success(files)
-                }
+                runOnUiThread { result.success(files) }
             } catch (e: Exception) {
-                runOnUiThread {
-                    result.error(
-                        "LIST_ERROR",
-                        e.message,
-                        null
-                    )
-                }
+                runOnUiThread { result.error("LIST_ERROR", e.message, null) }
             }
         }.start()
     }
 
-    private fun deleteFile(
-        path: String?,
-        result: MethodChannel.Result
-    ) {
-        if (path == null) {
-            result.error(
-                "NULL_PATH",
-                "Path is null",
-                null
-            )
-            return
-        }
-
+    private fun deleteFile(path: String?, result: MethodChannel.Result) {
+        if (path == null) { result.error("NULL_PATH", "Path is null", null); return }
         Thread {
             val deleted = File(path).delete()
-
             runOnUiThread {
-                if (deleted) {
-                    result.success(true)
-                } else {
-                    result.error(
-                        "DELETE_ERROR",
-                        "Could not delete $path",
-                        null
-                    )
-                }
+                if (deleted) result.success(true)
+                else result.error("DELETE_ERROR", "Could not delete $path", null)
             }
         }.start()
     }
 
-    private fun sendFileToPhone(
-        path: String?,
-        result: MethodChannel.Result
-    ) {
-        if (path == null) {
-            result.error(
-                "NULL_PATH",
-                "Path is null",
-                null
-            )
-            return
-        }
-
+    private fun sendFileToPhone(path: String?, result: MethodChannel.Result) {
+        if (path == null) { result.error("NULL_PATH", "Path is null", null); return }
         Thread {
             try {
-                val nodes = Tasks.await(
-                    Wearable.getNodeClient(this).connectedNodes
-                )
-
-                if (nodes.isEmpty()) {
-                    runOnUiThread {
-                        result.error(
-                            "NO_NODE",
-                            "No connected phone found",
-                            null
-                        )
-                    }
-                    return@Thread
-                }
-
+                val nodes = Tasks.await(Wearable.getNodeClient(this).connectedNodes)
+                if (nodes.isEmpty()) { runOnUiThread { result.error("NO_NODE", "No phone found", null) }; return@Thread }
                 val file = File(path)
-
-                if (!file.exists()) {
-                    runOnUiThread {
-                        result.error(
-                            "NO_FILE",
-                            "File not found: $path",
-                            null
-                        )
-                    }
-                    return@Thread
-                }
-
-                val nodeId = nodes.first().id
-
+                if (!file.exists()) { runOnUiThread { result.error("NO_FILE", "Not found: $path", null) }; return@Thread }
                 val channelClient = Wearable.getChannelClient(this)
-
-                val channel = Tasks.await(
-                    channelClient.openChannel(
-                        nodeId,
-                        "/imu_file/${file.name}"
-                    )
-                )
-
-                val outputStream = Tasks.await(
-                    channelClient.getOutputStream(channel)
-                )
-
-                file.inputStream().use { input ->
-                    outputStream.use { output ->
-                        input.copyTo(output)
-                    }
-                }
-
-                Tasks.await(
-                    channelClient.close(channel)
-                )
-
-                runOnUiThread {
-                    result.success(true)
-                }
+                val channel = Tasks.await(channelClient.openChannel(nodes.first().id, "/imu_file/${file.name}"))
+                val out = Tasks.await(channelClient.getOutputStream(channel))
+                file.inputStream().use { i -> out.use { o -> i.copyTo(o) } }
+                Tasks.await(channelClient.close(channel))
+                runOnUiThread { result.success(true) }
             } catch (e: Exception) {
-                Log.e(
-                    TAG,
-                    "sendFileToPhone error",
-                    e
-                )
-
-                runOnUiThread {
-                    result.error(
-                        "SEND_ERROR",
-                        e.message,
-                        null
-                    )
-                }
+                Log.e(TAG, "sendFileToPhone", e)
+                runOnUiThread { result.error("SEND_ERROR", e.message, null) }
             }
         }.start()
     }
 
-    // ── Phone-side implementations ───────────────────────────────────────
+    // ── Phone-side ────────────────────────────────────────────────────────
 
-    private fun getConnectedNodes(
-        result: MethodChannel.Result
-    ) {
-        Wearable.getNodeClient(this)
-            .connectedNodes
+    private fun getConnectedNodes(result: MethodChannel.Result) {
+        Wearable.getNodeClient(this).connectedNodes
             .addOnSuccessListener { nodes ->
-                val list = nodes.map {
-                    mapOf(
-                        "id" to it.id,
-                        "displayName" to it.displayName
-                    )
-                }
-
-                result.success(list)
+                result.success(nodes.map { mapOf("id" to it.id, "displayName" to it.displayName) })
             }
-            .addOnFailureListener {
-                result.error(
-                    "NODE_ERROR",
-                    it.message,
-                    null
-                )
-            }
+            .addOnFailureListener { result.error("NODE_ERROR", it.message, null) }
     }
 
-    private fun requestFileList(
-        result: MethodChannel.Result
-    ) {
+    private fun requestFileList(result: MethodChannel.Result) {
         Thread {
             try {
-                val nodes = Tasks.await(
-                    Wearable.getNodeClient(this).connectedNodes
-                )
-
-                if (nodes.isEmpty()) {
-                    runOnUiThread {
-                        result.error(
-                            "NO_NODE",
-                            "No watch connected",
-                            null
-                        )
-                    }
-                    return@Thread
-                }
-
-                val nodeId = nodes.first().id
-
-                Tasks.await(
-                    Wearable.getMessageClient(this).sendMessage(
-                        nodeId,
-                        "/list_files",
-                        ByteArray(0)
-                    )
-                )
-
-                runOnUiThread {
-                    result.success(true)
-                }
+                val nodes = Tasks.await(Wearable.getNodeClient(this).connectedNodes)
+                if (nodes.isEmpty()) { runOnUiThread { result.error("NO_NODE", "No watch connected", null) }; return@Thread }
+                Tasks.await(Wearable.getMessageClient(this).sendMessage(nodes.first().id, "/list_files", ByteArray(0)))
+                runOnUiThread { result.success(true) }
             } catch (e: Exception) {
-                runOnUiThread {
-                    result.error(
-                        "MSG_ERROR",
-                        e.message,
-                        null
-                    )
-                }
+                runOnUiThread { result.error("MSG_ERROR", e.message, null) }
             }
         }.start()
     }
 
-    private fun deleteWatchFile(
-        path: String?,
-        result: MethodChannel.Result
-    ) {
-        if (path == null) {
-            result.error(
-                "NULL_PATH",
-                "Path is null",
-                null
-            )
-            return
-        }
-
+    private fun deleteWatchFile(path: String?, result: MethodChannel.Result) {
+        if (path == null) { result.error("NULL_PATH", "Path is null", null); return }
         Thread {
             try {
-                val nodes = Tasks.await(
-                    Wearable.getNodeClient(this).connectedNodes
-                )
-
-                if (nodes.isEmpty()) {
-                    runOnUiThread {
-                        result.error(
-                            "NO_NODE",
-                            "No watch connected",
-                            null
-                        )
-                    }
-                    return@Thread
-                }
-
-                val nodeId = nodes.first().id
-
-                Tasks.await(
-                    Wearable.getMessageClient(this).sendMessage(
-                        nodeId,
-                        "/delete_file",
-                        path.toByteArray()
-                    )
-                )
-
-                runOnUiThread {
-                    result.success(true)
-                }
+                val nodes = Tasks.await(Wearable.getNodeClient(this).connectedNodes)
+                if (nodes.isEmpty()) { runOnUiThread { result.error("NO_NODE", "No watch connected", null) }; return@Thread }
+                Tasks.await(Wearable.getMessageClient(this).sendMessage(nodes.first().id, "/delete_file", path.toByteArray()))
+                runOnUiThread { result.success(true) }
             } catch (e: Exception) {
-                runOnUiThread {
-                    result.error(
-                        "MSG_ERROR",
-                        e.message,
-                        null
-                    )
-                }
+                runOnUiThread { result.error("MSG_ERROR", e.message, null) }
             }
         }.start()
     }
 
-    private fun syncAllFiles(
-        deleteAfterSync: Boolean,
-        result: MethodChannel.Result
-    ) {
+    private fun syncAllFiles(deleteAfterSync: Boolean, result: MethodChannel.Result) {
         Thread {
             try {
-                val nodes = Tasks.await(
-                    Wearable.getNodeClient(this).connectedNodes
-                )
-
-                if (nodes.isEmpty()) {
-                    runOnUiThread {
-                        result.error(
-                            "NO_NODE",
-                            "No watch connected",
-                            null
-                        )
-                    }
-                    return@Thread
-                }
-
-                val nodeId = nodes.first().id
-
-                val payload = if (deleteAfterSync) {
-                    "delete"
-                } else {
-                    "keep"
-                }
-
-                Tasks.await(
-                    Wearable.getMessageClient(this).sendMessage(
-                        nodeId,
-                        "/sync_all",
-                        payload.toByteArray()
-                    )
-                )
-
-                runOnUiThread {
-                    result.success(true)
-                }
+                val nodes = Tasks.await(Wearable.getNodeClient(this).connectedNodes)
+                if (nodes.isEmpty()) { runOnUiThread { result.error("NO_NODE", "No watch connected", null) }; return@Thread }
+                // Tell the watch which files are already on this phone so it skips them.
+                val dir = getExternalFilesDir(null) ?: filesDir
+                val existing = dir.listFiles { f -> f.name.endsWith(".csv") }
+                    ?.joinToString("|") { it.name } ?: ""
+                val mode = if (deleteAfterSync) "delete" else "keep"
+                val payload = "$mode\n$existing"
+                Tasks.await(Wearable.getMessageClient(this).sendMessage(nodes.first().id, "/sync_all", payload.toByteArray()))
+                runOnUiThread { result.success(true) }
             } catch (e: Exception) {
-                runOnUiThread {
-                    result.error(
-                        "SYNC_ERROR",
-                        e.message,
-                        null
-                    )
-                }
+                runOnUiThread { result.error("SYNC_ERROR", e.message, null) }
             }
         }.start()
     }
 
-    private fun listSyncedFiles(
-        result: MethodChannel.Result
-    ) {
+    private fun listSyncedFiles(result: MethodChannel.Result) {
         Thread {
             try {
                 val dir = getExternalFilesDir(null) ?: filesDir
-
-                val files = dir.listFiles { f ->
-                    f.name.endsWith(".csv")
-                }
-                    ?.map {
-                        mapOf(
-                            "name" to it.name,
-                            "path" to it.absolutePath,
-                            "size" to it.length()
-                        )
-                    }
+                val files = dir.listFiles { f -> f.name.endsWith(".csv") }
+                    ?.map { mapOf("name" to it.name, "path" to it.absolutePath, "size" to it.length()) }
                     ?: emptyList()
-
-                runOnUiThread {
-                    result.success(files)
-                }
+                runOnUiThread { result.success(files) }
             } catch (e: Exception) {
-                runOnUiThread {
-                    result.error(
-                        "LIST_ERROR",
-                        e.message,
-                        null
-                    )
-                }
+                runOnUiThread { result.error("LIST_ERROR", e.message, null) }
             }
         }.start()
     }
 
-    private fun deleteSyncedFile(
-        path: String?,
-        result: MethodChannel.Result
-    ) {
-        if (path == null) {
-            result.error(
-                "NULL_PATH",
-                "Path is null",
-                null
-            )
-            return
-        }
-
+    private fun deleteSyncedFile(path: String?, result: MethodChannel.Result) {
+        if (path == null) { result.error("NULL_PATH", "Path is null", null); return }
         Thread {
             val deleted = File(path).delete()
-
             runOnUiThread {
-                if (deleted) {
-                    result.success(true)
-                } else {
-                    result.error(
-                        "DELETE_ERROR",
-                        "Could not delete $path",
-                        null
-                    )
-                }
+                if (deleted) result.success(true)
+                else result.error("DELETE_ERROR", "Could not delete $path", null)
             }
         }.start()
     }
