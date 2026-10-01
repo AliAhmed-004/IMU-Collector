@@ -37,11 +37,12 @@ class _RecorderScreenState extends State<RecorderScreen>
   StreamSubscription<AccelerometerEvent>? _accelSub;
   StreamSubscription<GyroscopeEvent>? _gyroSub;
 
-  AccelerometerEvent? _lastAccel;
-  GyroscopeEvent? _lastGyro;
-
-  static const _targetIntervalMs = 20;
-  Timer? _sampleTimer;
+  // ── Paired-event state ─────────────────────────────────────────────
+  // Each sensor sets its "pending" slot. A row is written only when
+  // both slots are non-null, then both are cleared — guaranteeing
+  // exactly one unique (accel, gyro) pair per written row.
+  AccelerometerEvent? _pendingAccel;
+  GyroscopeEvent? _pendingGyro;
 
   late AnimationController _pulseCtrl;
   late Animation<double> _pulseAnim;
@@ -80,29 +81,32 @@ class _RecorderScreenState extends State<RecorderScreen>
       _currentFile = File('${dir.path}/$filename');
 
       _sink = _currentFile!.openWrite();
-      _sink!.writeln('timestamp_ms,ax,ay,az,gx,gy,gz');
+      _sink!.writeln('timestamp_us,ax,ay,az,gx,gy,gz');
 
       _startTime = DateTime.now();
       _sampleCount = 0;
       _lastSavedPath = null;
+      _pendingAccel = null;
+      _pendingGyro = null;
 
       _accelSub = accelerometerEventStream(
         samplingPeriod: SensorInterval.fastestInterval,
       ).listen(
-        (e) => _lastAccel = e,
+        (e) {
+          _pendingAccel = e;
+          _tryWriteSample();
+        },
         onError: (e) => debugPrint('ACCEL ERROR: $e'),
       );
 
       _gyroSub = gyroscopeEventStream(
         samplingPeriod: SensorInterval.fastestInterval,
       ).listen(
-        (e) => _lastGyro = e,
+        (e) {
+          _pendingGyro = e;
+          _tryWriteSample();
+        },
         onError: (e) => debugPrint('GYRO ERROR: $e'),
-      );
-
-      _sampleTimer = Timer.periodic(
-        const Duration(milliseconds: _targetIntervalMs),
-        (_) => _writeSample(),
       );
 
       _uiTimer = Timer.periodic(const Duration(seconds: 1), (_) {
@@ -125,12 +129,16 @@ class _RecorderScreenState extends State<RecorderScreen>
     }
   }
 
-  void _writeSample() {
-    final accel = _lastAccel;
-    final gyro = _lastGyro;
+  /// Called whenever either sensor fires. Writes one row only when
+  /// both sensors have a fresh (unconsumed) event, then clears both
+  /// slots so the next row requires two new events again.
+  void _tryWriteSample() {
+    final accel = _pendingAccel;
+    final gyro = _pendingGyro;
     if (accel == null || gyro == null) return;
 
-    final ts = DateTime.now().millisecondsSinceEpoch;
+    final ts = DateTime.now().microsecondsSinceEpoch;
+
     _sink?.writeln(
       '$ts,'
       '${accel.x.toStringAsFixed(5)},'
@@ -140,12 +148,15 @@ class _RecorderScreenState extends State<RecorderScreen>
       '${gyro.y.toStringAsFixed(5)},'
       '${gyro.z.toStringAsFixed(5)}',
     );
+
+    // Clear both slots — next write requires fresh events from each sensor.
+    _pendingAccel = null;
+    _pendingGyro = null;
+
     _sampleCount++;
   }
 
   Future<void> _stopRecording() async {
-    _sampleTimer?.cancel();
-    _sampleTimer = null;
     _uiTimer?.cancel();
     _uiTimer = null;
     _accelSub?.cancel();
@@ -156,6 +167,9 @@ class _RecorderScreenState extends State<RecorderScreen>
     await _sink?.flush();
     await _sink?.close();
     _sink = null;
+
+    _pendingAccel = null;
+    _pendingGyro = null;
 
     _pulseCtrl.stop();
     _pulseCtrl.reset();
@@ -295,7 +309,7 @@ class _RecorderScreenState extends State<RecorderScreen>
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// Sub-widgets
+// Sub-widgets (unchanged)
 // ─────────────────────────────────────────────────────────────────────────────
 
 class _TimerDisplay extends StatelessWidget {
